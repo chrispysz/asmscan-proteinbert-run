@@ -45,6 +45,10 @@ Prediction results will be saved in `output` folder.
 
    `prob`: predicted probability of the highest-scoring subsequence within the primary sequence to be amyloidogenic
 
+   `beg`: beginning position of the highest-scoring sequence
+
+   `end`: ending position of the highest-scoring sequence
+
    `frag`: highest-scoring amino-acid sequence within the primary sequence
 
 

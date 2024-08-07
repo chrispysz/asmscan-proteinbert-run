@@ -4,6 +4,8 @@ import os
 import time
 from typing import Tuple, List
 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
 import numpy as np
 import tensorflow as tf
 
@@ -23,6 +25,7 @@ def predict(model_dir: str, fasta_path: str, output_path: str, multi: bool, chun
     comb_model_name = f"{MODEL_NAME}comb{''.join(str(i) for i in range(1, len(cv_models_filepaths) + 1))}"
 
     # Load all models once
+    print(f"Loading {len(cv_models_filepaths)} models...")
     models = [tf.keras.models.load_model(model_filepath) for model_filepath in cv_models_filepaths]
 
     for fasta_filepath in fasta_filepaths:
@@ -97,7 +100,7 @@ def predict(model_dir: str, fasta_path: str, output_path: str, multi: bool, chun
 def initialize_csv(model_name: str, fs: FragmentedSet, output_path: str) -> object:
     filepath = os.path.join(output_path, f"{fs.set_name}.{os.path.basename(model_name)}.csv")
     file = open(makedir(filepath), 'w')
-    file.write(f"id{SEP}prob{SEP}frag\n")  # Write header
+    file.write(f"id{SEP}prob{SEP}beg{SEP}end{SEP}frag\n")  # Write header
     return file
 
 
@@ -119,15 +122,20 @@ def get_new_fragments(fs: FragmentedSet, processed_ids: set) -> Tuple[List[str],
 
 def append_predictions_to_csv(file: object, ids: List[str], fragments_prediction: np.ndarray, frags: List[str],
                               scopes: List[int]) -> None:
-    pred, selected_frags = to_sequence_prediction(fragments_prediction, frags, scopes)
-    for id, p, f in zip(ids, pred, selected_frags):
-        file.write(f"{id}{SEP}{p}{SEP}{f}\n")
+    pred, selected_frags, start_index = to_sequence_prediction(fragments_prediction, frags, scopes)
+    for id, p, s_i, f in zip(ids, pred, start_index, selected_frags):
+        if len(f) < 40:
+            e_i = -1
+        else:
+            e_i = s_i + 40
+        file.write(f"{id}{SEP}{p:.3f}{SEP}{s_i + 1}{SEP}{e_i}{SEP}{f}\n")
 
 
 def to_sequence_prediction(fragments_prediction: np.ndarray, frags: List[str], scopes: List[int]) -> Tuple[
-    List[float], List[str]]:
+    List[float], List[str], List]:
     pred = []
     selected_frags = []
+    start_index = []
 
     p = 0
     for ss in scopes:
@@ -135,9 +143,10 @@ def to_sequence_prediction(fragments_prediction: np.ndarray, frags: List[str], s
         max_pred_index = np.argmax(scoped_frags_pred)
         pred.append(scoped_frags_pred[max_pred_index])
         selected_frags.append(frags[p + max_pred_index])
+        start_index.append(max_pred_index)
         p += ss
 
-    return pred, selected_frags
+    return pred, selected_frags, start_index
 
 
 if __name__ == "__main__":
