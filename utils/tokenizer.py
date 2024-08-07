@@ -1,7 +1,6 @@
-from utils.config import ALL_AAS, ADDITIONAL_TOKENS
-
 import numpy as np
 
+from utils.config import ALL_AAS, ADDITIONAL_TOKENS
 
 n_aas = len(ALL_AAS)
 aa_to_token_index = {aa: i for i, aa in enumerate(ALL_AAS)}

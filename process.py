@@ -1,118 +1,154 @@
 import argparse
 import glob
 import os
+import time
 from typing import Tuple, List
 
 import numpy as np
-import pandas as pd
 import tensorflow as tf
 
-from utils.config import (SEQ_CUTOFF, MODEL_NAME, ADDED_TOKENS_PER_SEQ, MODEL_PATH, FASTA_PATH,
-                          PREDS_PATH, makedir)
-from utils.datasets import load_fasta_as_lists
+from utils.FragmentedSet import FragmentedSet
+from utils.config import (SEQ_CUTOFF, MODEL_NAME, ADDED_TOKENS_PER_SEQ, MODEL_PATH, SEP, GO_SIZE, makedir)
 from utils.tokenizer import tokenize_seqs
 
 
-def _fragment_sequences(sequences: List[str], max_seq_len: int) -> Tuple[List[str], List[int]]:
-    frags = []
-    scopes = []
-
-    for seq in sequences:
-        seq_len = len(seq)
-
-        if seq_len > max_seq_len:
-            frags_number = seq_len - max_seq_len + 1
-
-            for i in range(frags_number):
-                frags.append(seq[i:i + max_seq_len])
-
-            scopes.append(frags_number)
-        else:
-            frags.append(seq)
-            scopes.append(1)
-
-    return frags, scopes
-
-
-class FragmentedSet:
-
-    def __init__(self, fasta_filepath: str, max_seq_len: int) -> None:
-        filepath_comps = fasta_filepath.split(os.sep)
-        self.set_name = filepath_comps[-1].split(".")[0]
-
-        self.ids, seqs = load_fasta_as_lists(fasta_filepath)
-        self.frags, self.scopes = _fragment_sequences(seqs, max_seq_len)
-
-
-def predict(model_dir: str) -> None:
-
+def predict(model_dir: str, fasta_path: str, output_path: str, multi: bool, chunk_size: int) -> None:
     cv_models_filepaths = glob.glob(os.path.join(model_dir, "*"))
-    fasta_filepaths = glob.glob(os.path.join(FASTA_PATH, "*"))
 
-    comb_model_name = MODEL_NAME + "comb" + "".join(str(i) for i in range(1, len(cv_models_filepaths) + 1))
+    if multi:
+        fasta_filepaths = glob.glob(os.path.join(fasta_path, "*.fa"))
+    else:
+        fasta_filepaths = [fasta_path]
+
+    comb_model_name = f"{MODEL_NAME}comb{''.join(str(i) for i in range(1, len(cv_models_filepaths) + 1))}"
+
+    # Load all models once
+    models = [tf.keras.models.load_model(model_filepath) for model_filepath in cv_models_filepaths]
 
     for fasta_filepath in fasta_filepaths:
+        fs = FragmentedSet(fasta_filepath, SEQ_CUTOFF, chunk_size)
+        print(f"Processing file: {fasta_filepath}")
+        print(f"Chunk size: {chunk_size}")
+        print(f"Progress will be logged after first chunk is processed...")
 
-        fs = FragmentedSet(fasta_filepath, SEQ_CUTOFF)
+        # Initialize CSV files for each model and the combined model
+        model_files = {model_path: initialize_csv(model_path, fs, output_path) for model_path in cv_models_filepaths}
+        model_files[comb_model_name] = initialize_csv(comb_model_name, fs, output_path)
 
-        # Tokenize text
-        x_tst = tokenize_seqs(fs.frags, SEQ_CUTOFF + ADDED_TOKENS_PER_SEQ)
+        start_time = time.time()
+        chunk_count = 0
+        sequences_count = 0
+        fragments_count = 0
+        while True:
 
-        y_pred = []
-        for i, model_filepath in enumerate(cv_models_filepaths):
-            # Load model
-            model = tf.keras.models.load_model(model_filepath)
-            print("Running predictions with %s..." % model_filepath)
+            if not fs.process_next_chunk():
+                break  # No more chunks to process
 
-            # Predict
-            preds = model.predict(
-                [x_tst, np.zeros((len(fs.frags), 8943), dtype=np.int8)], verbose=0)
+            chunk_count += 1
 
-            y_pred.append(preds.flatten())  # [[1], [1], ..., [1]] -> [1, 1, ..., 1]
+            # Process the current chunk
+            x_tst = tokenize_seqs(fs.frags, SEQ_CUTOFF + ADDED_TOKENS_PER_SEQ)
 
-            # Save cv results
-            model_name = os.path.basename(model_filepath)
-            save_model_prediction(model_name, fs, y_pred[i])
+            y_pred = []
+            for i, model in enumerate(models):
+                preds = model.predict(
+                    [x_tst, np.zeros((len(x_tst), GO_SIZE), dtype=np.int8)], verbose=0)
 
-        # Save comb results
-        if i > 0:
-            print("comb saved as", comb_model_name)
-            y_pred = np.mean(y_pred, axis=0)
-        save_model_prediction(comb_model_name, fs, y_pred)
+                y_pred.append(preds.flatten())
+
+                # Save cv results
+                append_predictions_to_csv(model_files[cv_models_filepaths[i]], fs.ids, y_pred[i], fs.frags, fs.scopes)
+
+            # Save combined results
+            if len(models) > 1:
+                y_pred_combined = np.mean(y_pred, axis=0)
+                append_predictions_to_csv(model_files[comb_model_name], fs.ids, y_pred_combined, fs.frags, fs.scopes)
+
+            # Calculate and display progress
+            chunk_end_time = time.time()
+            elapsed_time = chunk_end_time - start_time
+            sequences_count += len(fs.ids)
+            fragments_count += len(fs.frags)
+
+            print(
+                f"Chunk {chunk_count} processed in {elapsed_time / 60:.2f} minutes. Total sequences processed: {sequences_count}")
+            print("--------------------")
+
+            # Clear the current chunk data
+            fs.ids.clear()
+            fs.frags.clear()
+            fs.scopes.clear()
+
+        # Close all CSV files
+        for file in model_files.values():
+            file.close()
+
+        elapsed_time = time.time() - start_time
+        print(f"Finished processing {fasta_filepath}")
+        print(f"Total time taken: {elapsed_time / 60:.2f} minutes")
+        print(f"Total chunks processed: {chunk_count}")
+        print(f"Total sequences processed: {sequences_count}")
+        print(f"Total fragments processed: {fragments_count}")
+        print(f"Time per sequence: {elapsed_time / sequences_count:.3f} seconds")
+        print(f"Time per fragment: {elapsed_time / fragments_count * 1000:.3f} milliseconds")
+        print("====================")
 
 
-def save_model_prediction(model_name: str, fs: FragmentedSet, fragments_prediction) -> None:
-    pred, frags = to_sequence_prediction(fs, fragments_prediction)
-    save_prediction(
-        os.path.join(PREDS_PATH, f"{fs.set_name}.{model_name}.csv"),
-        fs, pred, frags
-    )
+def initialize_csv(model_name: str, fs: FragmentedSet, output_path: str) -> object:
+    filepath = os.path.join(output_path, f"{fs.set_name}.{os.path.basename(model_name)}.csv")
+    file = open(makedir(filepath), 'w')
+    file.write(f"id{SEP}prob{SEP}frag\n")  # Write header
+    return file
 
 
-def to_sequence_prediction(fs: FragmentedSet, fragments_prediction) \
-        -> Tuple[List[float], List[str]]:
+def get_new_fragments(fs: FragmentedSet, processed_ids: set) -> Tuple[List[str], List[int], List[str]]:
+    new_frags = []
+    new_scopes = []
+    new_ids = []
+
+    start_idx = 0
+    for id, scope in zip(fs.ids, fs.scopes):
+        if id not in processed_ids:
+            new_ids.append(id)
+            new_scopes.append(scope)
+            new_frags.extend(fs.frags[start_idx:start_idx + scope])
+        start_idx += scope
+
+    return new_frags, new_scopes, new_ids
+
+
+def append_predictions_to_csv(file: object, ids: List[str], fragments_prediction: np.ndarray, frags: List[str],
+                              scopes: List[int]) -> None:
+    pred, selected_frags = to_sequence_prediction(fragments_prediction, frags, scopes)
+    for id, p, f in zip(ids, pred, selected_frags):
+        file.write(f"{id}{SEP}{p}{SEP}{f}\n")
+
+
+def to_sequence_prediction(fragments_prediction: np.ndarray, frags: List[str], scopes: List[int]) -> Tuple[
+    List[float], List[str]]:
     pred = []
-    frags = []
+    selected_frags = []
 
     p = 0
-    for ss in fs.scopes:
+    for ss in scopes:
         scoped_frags_pred = fragments_prediction[p:p + ss]
         max_pred_index = np.argmax(scoped_frags_pred)
         pred.append(scoped_frags_pred[max_pred_index])
-        frags.append(fs.frags[p + max_pred_index])
+        selected_frags.append(frags[p + max_pred_index])
         p += ss
 
-    return pred, frags
-
-
-def save_prediction(filepath: str, fs: FragmentedSet, prediction: List[float], fragments: List[str]) -> None:
-    df = pd.DataFrame({
-        "id": fs.ids,
-        "prob": prediction,
-        "frag": fragments
-    })
-    df.to_csv(makedir(filepath), sep="\t", index=False)
+    return pred, selected_frags
 
 
 if __name__ == "__main__":
-    predict(MODEL_PATH)
+    parser = argparse.ArgumentParser(description="Predict using models for FASTA files.")
+    parser.add_argument("--fasta_path", required=True, help="Path to FASTA file or directory")
+    parser.add_argument("--output_path", required=True, help="Output path for prediction results")
+    parser.add_argument("--multi", action="store_true", help="Process multiple FASTA files in the directory")
+    parser.add_argument("--chunk_size", type=int, default=100,
+                        help="Number of sequences to process in a single chunk. Lower in case of memory issues")
+    args = parser.parse_args()
+
+    print(f"Starting prediction process. Output directory: {args.output_path}")
+    predict(MODEL_PATH, args.fasta_path, args.output_path, args.multi, args.chunk_size)
+    print("Prediction process completed.")

@@ -4,12 +4,11 @@ MODEL_NAME = "ProteinBERT"
 ADDED_TOKENS_PER_SEQ = 2
 SEQ_CUTOFF = 40
 MODEL_PATH = 'models'
-FASTA_PATH = 'fasta'
 ALL_AAS = 'ACDEFGHIKLMNPQRSTUVWXY'
 ADDITIONAL_TOKENS = ['<OTHER>', '<START>', '<END>', '<PAD>']
 
-PREDS_PATH = "/app/output"
 SEP = "\t"
+GO_SIZE = 8943
 
 
 def makedir(dirpath: str) -> str:
