@@ -1,6 +1,9 @@
-# asmscan-proteinbert
+# ASMscan-ProteinBERT-run
+![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white) 
 
+## Description
 This tool is intended for binary classification of potentially amyloidogenic protein sequences from `FASTA` files. 
+For training and evaluation scripts and data visit our ASMscan-ProteinBERT [repository](https://github.com/chrispysz/asmscan-proteinbert)
 
 ## Features
 - Read protein sequences from a `.fa` file
@@ -51,17 +54,34 @@ Prediction results will be saved in `output` folder.
 
    `frag`: highest-scoring amino-acid sequence within the primary sequence
 
-
 2. **How are output files formatted?**
 
    `fasta_filename`.`fold`.csv
-
 
 3. **How are the `comb` results calculated?**
 
    Results for each subsequence are averaged from all folds before selecting one with the highest value
 
-
 4. **What is the default `chunk_size`?**
 
    100
+
+## References
+Original model weights and architecture:
+
+* Brandes, N., Ofer, D., Peleg, Y., Rappoport, N. & Linial, M. 
+"ProteinBERT: A universal deep-learning model of protein sequence and function" 
+Bioinformatics (2022). https://doi.org/10.1093/bioinformatics/btac020<br>
+https://github.com/nadavbra/protein_bert
+
+ASMscan-ProteinBERT model is part of the [ASMscan](https://github.com/wdyrka-pwr/ASMscan) project:
+
+* Not yet published.
+
+ASMscan project is an extension of the ASMs analysis conducted with the [PCFG-CM](https://git.e-science.pl/wdyrka/pcfg-cm) model:
+
+* W. Dyrka, M. Gąsior-Głogowska, M. Szefczyk, N. Szulc, "Searching for universal model of amyloid signaling motifs using probabilistic context-free grammars", *BMC Bioinformatics*, 22, 222, 2021.
+
+* W. Dyrka, M. Pyzik, F. Coste, H. Talibart, "Estimating probabilistic context-free grammars for proteins using contact map constraints", *PeerJ*, 7, e6559, 2019.
+
+![GitHub License](https://img.shields.io/github/license/chrispysz/asmscan-proteinbert-run)
